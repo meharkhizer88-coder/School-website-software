@@ -10,7 +10,7 @@ function resolveApiBaseCandidates() {
 async function fetchFrom(base, path, options) {
   const response = await fetch(`${base}${path}`, {
     credentials: "include",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-role": window.localStorage.getItem("schoolRole") || "Super Admin" },
     ...options,
   });
   const payload = await response.json();

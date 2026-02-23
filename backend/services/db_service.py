@@ -85,6 +85,21 @@ def init_db() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS roles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS permissions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT UNIQUE NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS role_permissions (
+                role_id INTEGER NOT NULL,
+                permission_id INTEGER NOT NULL,
+                UNIQUE(role_id, permission_id),
+                FOREIGN KEY(role_id) REFERENCES roles(id),
+                FOREIGN KEY(permission_id) REFERENCES permissions(id)
+            );
             """
         )
         conn.commit()
@@ -93,30 +108,6 @@ def init_db() -> None:
 def seed_data() -> None:
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.cursor()
-        has_students = cur.execute("SELECT COUNT(*) FROM students").fetchone()[0]
-        if has_students:
-            return
-        now = datetime.utcnow().isoformat()
-        cur.execute(
-            "INSERT INTO students (name,father_name,phone,class_name,address,admission_date,notes,created_at) VALUES (?,?,?,?,?,?,?,?)",
-            ("Ali Khan", "Mr Khan", "+100000", "8", "Street 1", now[:10], "", now),
-        )
-        cur.execute(
-            "INSERT INTO staff (name,role,salary,joining_date,phone,status,created_at) VALUES (?,?,?,?,?,?,?)",
-            ("Ayesha Malik", "Teacher", 1800, now[:10], "+200000", "Active", now),
-        )
-        cur.execute(
-            "INSERT INTO fees (student_id,amount,method,payment_date,month) VALUES (?,?,?,?,?)",
-            (1, 120, "Cash", now[:10], now[:7]),
-        )
-        cur.execute(
-            "INSERT INTO expenses (title,amount,category,expense_date,description) VALUES (?,?,?,?,?)",
-            ("Utilities", 300, "Operations", now[:10], "Monthly utilities"),
-        )
-        cur.execute(
-            "INSERT INTO activities (action,entity,entity_id,created_at) VALUES (?,?,?,?)",
-            ("seed", "system", "0", now),
-        )
         settings_payload = {
             "school_info": {
                 "school_name": "Global Academy",
@@ -142,9 +133,51 @@ def seed_data() -> None:
                 "Reports": "Reports",
                 "Settings": "Settings",
             },
+            "dev": {"company": "", "phone": "", "email": "", "address": "", "notes": ""}
         }
-        cur.execute("INSERT INTO app_settings(key, value) VALUES (?,?)", ("system", json.dumps(settings_payload)))
+        cur.execute("INSERT INTO app_settings(key, value) VALUES (?,?) ON CONFLICT(key) DO NOTHING", ("system", json.dumps(settings_payload)))
+
+        role_names = ["Super Admin", "Admin", "Staff", "Viewer"]
+        for r in role_names:
+            cur.execute("INSERT INTO roles(name) VALUES (?) ON CONFLICT(name) DO NOTHING", (r,))
+
+        perms = [
+            "manage_students","manage_staff","manage_attendance","manage_finance","manage_expenses","view_reports","manage_settings"
+        ]
+        for code in perms:
+            cur.execute("INSERT INTO permissions(code) VALUES (?) ON CONFLICT(code) DO NOTHING", (code,))
+
+        # grant all to Super Admin/Admin, partial to Staff, view only to Viewer
+        role_map = {r[1]: r[0] for r in cur.execute("SELECT id,name FROM roles").fetchall()}
+        perm_map = {r[1]: r[0] for r in cur.execute("SELECT id,code FROM permissions").fetchall()}
+        grants = {
+            "Super Admin": perms,
+            "Admin": perms,
+            "Staff": ["manage_students","manage_attendance","manage_finance","view_reports"],
+            "Viewer": ["view_reports"],
+        }
+        for role, codes in grants.items():
+            for code in codes:
+                cur.execute(
+                    "INSERT INTO role_permissions(role_id, permission_id) VALUES (?,?) ON CONFLICT(role_id, permission_id) DO NOTHING",
+                    (role_map[role], perm_map[code]),
+                )
         conn.commit()
+
+
+def has_permission(role: str, permission_code: str) -> bool:
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.cursor()
+        row = cur.execute(
+            """
+            SELECT 1 FROM role_permissions rp
+            JOIN roles r ON rp.role_id = r.id
+            JOIN permissions p ON rp.permission_id = p.id
+            WHERE r.name=? AND p.code=?
+            """,
+            (role, permission_code),
+        ).fetchone()
+    return bool(row)
 
 
 @contextmanager
